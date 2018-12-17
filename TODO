@@ -1,0 +1,16 @@
+
+version 0.2:
+ -- 32/64/... bits data types: we should not depend on it
+ -- off_t for internal segments offset might be good idea, but... think of it
+ -- add mmap/ipc support for create/init/destroy/etc functions as a param
+    and get rid of those macros (though they should remain internally)
+ -- replace some "for(..., ..., i++) mem[i]=0" things with memset() or bzero() 
+ -- add support for posix shmem
+ -- do we really need those (de)alloc stats collecting?
+ -- write shmal_realloc() and some siblings
+ -- add some checks into configure.am
+
+version 0.3:
+ -- separate tables for free/used cells data?
+ -- provide more mutex mechanisms then just pthread_mutex
+

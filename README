@@ -1,0 +1,182 @@
+
+ WHAT IS IT?
+ -----------
+ This is a small and primitive shared memory allocator that allows 
+ several independent processes to share same data over one or more
+ shared memory segments.
+ 
+
+
+ COMPILATION:
+ -----------
+ Compilation requires -lpthread and one of -DUSE_MMAP or -DUSE_SYSVIPC
+ to be added to compiler/linker flags
+ USE_MMAP instructs to use mmap() call to aquire shared memory segment while
+ USE_SYSVIPC - use SysV IPC shmget()/shmat() mechanics to do that
+ In first case shmal_ctx_t structure will have a member nameed "fname" which
+ defines file name for mmap()
+ In second case - a member named "key" which defines SysV shmem segment key to use
+
+ FUNCTIONS:
+ ----------
+ int shmal_attach(shmal_ctx_t *shm)
+    - attach to existing shmem segment and fill local data
+    - shm fields cells_num, cell_size and key/fname must be filled in before the call
+    - shm->memsize will be filled in after return
+    - return -1 on error, 0 if ok
+
+ int shmal_create(shmal_ctx_t *shm)
+    - create shmem and init it, fill local data
+    - shm fields cells_num, cell_size and key/fname must be filled in before
+    - shm->memsize will be filled in after return
+    - return -1 on error, 0 if ok
+
+ int shmal_clear(shmal_ctx_t *shm)
+    - wipe out all segment data and reinit cells
+    - return -1 on error, 0 if ok
+
+ int shmal_detach(shmal_ctx_t *shm)
+    - detach from the segment
+    - return 0 if ok, !0 otherwise
+
+ int shmal_destroy(shmal_ctx_t *shm)
+    - detach from shmem segment and delete it
+    - return 0 if ok, !0 otherwise
+
+ int shmal_alloc(shmal_ctx_t *shm, size_t size)
+    - allocate mem in segment shm and return relative offset
+      this call is equivalent to shmal_alloc_off(shm, size, -1)
+      and actually is a macro
+    - allocated memory will be zeroed
+    - return NULLOFF if error, >= 0 if ok
+
+ int shmal_alloc_off(shmal_ctx_t *shm, size_t size, off_t off)
+    - allocate mem in segment shm at exactly "off" offset
+    - offset may be negative to indicate automatic offset search
+    - allocated memory will be zeroed
+    - return NULLOFF if error, >= 0 if ok
+
+ int shmal_free(shmal_ctx_t *shm, off_t offset)
+    - free allocated memory in segment shm at offset "off"
+    - return NULLOFF if error, 0 if ok
+
+ off_t shmal_strdup(shmal_ctx_t *shm, char *ptr)
+    - equivalent strdup(): make a copy of a string and place it
+      into shmem segment "shm"
+    - "ptr" is a local address
+    - return NULLOFF on error, valid offset if ok
+
+ All functions set valid "errno" on error.
+
+ MACROS:
+ ---------
+ void* OFF_TO_ADDR(shmal_ctx_t *shm, off_t offset)
+   - convert shmem chunk "shm" offset into local address
+
+ off_t ADDR_TO_OFF(shmal_ctx_t *shm, void *addr)
+   - convert local addr into "shm" shmem segment offset
+
+ SHMAL_LOCK(shmal_ctx_t *shm)
+ SHMAL_UNLOCK(shmal_ctx_t *shm)
+   - lock and unlock shm memory segment
+   - the lock is blocking, nonrecursive
+   - return 0 if ok, !0 otherwise
+
+ NULLOFF
+   - "null offset" or "invalid offset"
+     sorta NULL for pointers, but actually = -1
+
+ 
+ EXAMPLES: 
+ ---------
+ 2 processes - 1st creates a shmem segment and writes a structure into it
+ 2nd - attaches to the segment and reads data from it
+
+ 1st process:
+ -----------
+
+  #define USE_SYSVIPC
+  #include "shmal.h"
+
+  #define SHM_KEY  0x00001234
+
+  int main(void) {
+
+    struct { 
+      off_t text; 
+      int a; 
+    } *p;
+    shmal_ctx_t *shm;
+
+    shm = (shmal_ctx_t *)calloc(sizeof(*shm), 1);  // context is always local variable
+
+    shm->cells_num = 1024;     // request 1024 blocks
+    shm->cell_size = 64;       // block size is 64 bytes
+    shm->key = SHM_KEY;        // shmem key for segment
+
+    if (shmal_create(shm)) {    // create shmem segment and allocate mem
+      perror("");
+      return 1;
+    }
+
+    SHMAL_LOCK(shm);      // lock the segment
+
+    shmal_clear(shm);      // wipe out the segment
+
+    p = OFF_TO_ADDR(shm, shmal_alloc(shm, 128));   // request 128 bytes, local variable has local addr
+    p->text = shmal_alloc(shm, 96);                // request 96 bytes, "p" is in shmem, 
+                                                   // so all its elements must be there too
+    p->a = 1234;                                   // nothing special to ints, floats etc
+    printf("offset of 'p' is %d\n", (int)p);       // 123 will be printed, for example
+    strcpy(OFF_TO_ADDR(shm, p->text), "hello!");   // strcpy() requires local addr
+    puts(OFF_TO_ADDR(shm, p->text));               // puts() requires local addr
+
+    SHM_UNLOCK(shm);   // unlock the segment
+
+    shmal_detach(shm);                          // detach from segment
+ 
+    return 0;
+  }
+
+
+ 2nd process:
+ ------------
+
+ #define USE_SYSVIPC
+ #include "shmal.h"
+
+ #define SHM_KEY  0x00001234
+
+
+ int main(void) {
+
+  struct { 
+    off_t text; 
+    int a; 
+  } *p;             // same struct as in 1st process
+  shmal_ctx_t *shm;
+
+  shm = (shmal_ctx_t *)calloc(sizeof(*shm), 1);   // context is always local variable
+
+  shm->cells_num = 1024;     // request 1024 block  (same as in 1st process!)
+  shm->cell_size = 64;       // block size is 64 bytes (same as in 1st process!)
+  shm->key = SHM_KEY;        // shmem key for segment (same as in 1st process!)
+  
+  if (shmal_attach(shm)) {   // attach to segment SHM_KEY wich has cells_num=1024 and cell_size=64
+    perror("");
+    return 1;
+  }
+
+  SHMAL_LOCK(shm);                       // lock the segment
+
+  p = OFF_TO_ADDR(shm, 123);             // that 123 is the offset of "p" printed by 1st process
+  puts(OFF_TO_ADDR(shm, p->text));       // puts() requires local addr, p->text is an offset
+  fprintf(stderr,"a = %d\n", (int)p->a); // "p" already converted to addr
+
+  SHM_UNLOCK(shm);                      // unlock the segment
+
+  shmal_destroy(shm);                   // detach and destroy the segment
+
+  return 0;
+}
+
